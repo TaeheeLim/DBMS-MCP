@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.mcp.json
+client.mcp.json
+test_connection.py
+README.md
+DEPLOY.md
+.git/
+.gitignore

@@ -1,0 +1,30 @@
+{
+  "default": "tibero",
+  "connections": {
+    "tibero": {
+      "_defaults": {
+        "driver": "com.tmax.tibero.jdbc.TbDriver",
+        "jars": "JAR PATH"
+      },
+      "dev": {
+        "url": "jdbc:tibero:thin:@127.0.0.1:8724:tibero7",
+        "user": "USERNAME",
+        "password": "PASSWORD"
+      }
+    },
+    "oracle" : {
+      "_defaults" : {
+        "driver" : "oracle.jdbc.driver.OracleDriver",
+        "jars" : "JAR PATH"
+      },
+      "dev": {
+        "url": "jdbc:oracle:thin:@127.0.0.1:1521:ORCL",
+        "user": "USERNAME",
+        "password": "PASSWORD"
+      }
+    },
+    "postgresql" : {
+
+    }
+  }
+}

@@ -1,0 +1,18 @@
+services:
+  jdbc-mcp:
+    build: .
+    image: jdbc-mcp:latest
+    container_name: jdbc-mcp
+    restart: unless-stopped
+    ports:
+      - "8000:8000"          # 사내망에서 http://<서버IP>:8000/mcp 로 접근
+    environment:
+      MCP_TRANSPORT: "http"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8000"
+      JDBC_CONNECTIONS: "/app/connections.json"
+      DB_MAX_ROWS: "200"
+    volumes:
+      # 접속 정보와 드라이버 jar 는 이미지 밖에서 마운트 (읽기 전용)
+      - ./connections.json:/app/connections.json:ro
+      - ./jars:/app/jars:ro
