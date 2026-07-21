@@ -10,7 +10,8 @@
 
 - 연결: JDBC (jaydebeapi + 해당 DB의 JDBC jar, 내부적으로 JVM 사용)
 - 테이블/컬럼 조회: JDBC 표준 DatabaseMetaData 사용 (DB 종류와 무관)
-- 안전장치: SELECT/WITH 만 허용, 다중 문장 차단, 행 수 상한
+- 실행 가능: 조회(SELECT/WITH) + 변경(INSERT/UPDATE/DELETE/MERGE, 자동 커밋)
+- 안전장치: DDL(CREATE/DROP/ALTER 등) 차단, 다중 문장 차단, 조회 행 수 상한
 
 환경변수
 --------
@@ -169,9 +170,13 @@ def get_conn(connection: str = ""):
     )
 
 
-# --- 읽기 전용 검증 ----------------------------------------------------------
+# --- 문장 검증 --------------------------------------------------------------
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _LINE_COMMENT = re.compile(r"--[^\n]*")
+
+# 조회 문장(결과 집합 반환) / 변경 문장(행 수 반환)
+_READ_STMTS = ("select", "with")
+_WRITE_STMTS = ("insert", "update", "delete", "merge")
 
 
 def _strip_comments(sql: str) -> str:
@@ -180,22 +185,31 @@ def _strip_comments(sql: str) -> str:
     return sql.strip()
 
 
-def _assert_read_only(sql: str) -> str:
-    """SELECT/WITH 단일 문장만 통과시킨다. 위반 시 예외."""
+def _classify(sql: str) -> tuple[str, str]:
+    """단일 문장인지 확인하고 (종류, 본문)을 반환한다.
+
+    종류: 'read'  → SELECT/WITH (결과 집합 반환)
+          'write' → INSERT/UPDATE/DELETE/MERGE (커밋 후 영향 행 수 반환)
+    DDL(CREATE/DROP/ALTER/TRUNCATE 등)과 다중 문장은 여전히 차단한다.
+    """
     clean = _strip_comments(sql)
     if not clean:
         raise ValueError("빈 쿼리입니다.")
 
     body = clean[:-1] if clean.endswith(";") else clean
     if ";" in body:
-        raise ValueError("다중 문장은 허용되지 않습니다. 한 번에 한 SELECT만 실행하세요.")
+        raise ValueError("다중 문장은 허용되지 않습니다. 한 번에 한 문장만 실행하세요.")
 
     first = body.lstrip().split(None, 1)[0].lower()
-    if first not in ("select", "with"):
-        raise ValueError(
-            f"읽기 전용 서버입니다. SELECT/WITH 만 허용됩니다 (요청: '{first.upper()}')."
-        )
-    return body
+    if first in _READ_STMTS:
+        return "read", body
+    if first in _WRITE_STMTS:
+        return "write", body
+    raise ValueError(
+        "허용되지 않는 문장입니다. "
+        "SELECT/WITH/INSERT/UPDATE/DELETE/MERGE 만 가능합니다 "
+        f"(요청: '{first.upper()}')."
+    )
 
 
 def _norm(v):
@@ -237,29 +251,43 @@ def list_connections() -> dict:
 
 @mcp.tool()
 def run_query(sql: str, connection: str = "") -> dict:
-    """SELECT 또는 WITH 쿼리를 실행하고 결과를 반환한다.
+    """SQL 문장을 실행한다 (SELECT/WITH 조회 + INSERT/UPDATE/DELETE/MERGE 변경).
 
     connection: 사용할 연결 이름 'group/name' (미지정 시 default). 사용자가 별칭/한글로
         DB를 지칭하면 먼저 list_connections 로 목록을 보고 알맞은 이름을 고를 것.
-    읽기 전용이며 결과는 DB_MAX_ROWS 행으로 제한된다.
-    반환: {columns: [...], rows: [{...}, ...], row_count: int, truncated: bool}
+
+    - SELECT/WITH: 결과는 DB_MAX_ROWS 행으로 제한된다.
+      반환: {statement:'read', columns:[...], rows:[{...}], row_count:int, truncated:bool}
+    - INSERT/UPDATE/DELETE/MERGE: 실행 후 자동 커밋된다.
+      반환: {statement:'write', affected_rows:int}
+
+    ⚠ 변경 문장은 되돌릴 수 없다. UPDATE/DELETE 는 반드시 WHERE 절을 확인할 것.
+    DDL(CREATE/DROP/ALTER/TRUNCATE)과 다중 문장은 차단된다.
     """
-    body = _assert_read_only(sql)
+    kind, body = _classify(sql)
     conn = get_conn(connection)
     try:
         cur = conn.cursor()
         cur.execute(body)
-        cols = [d[0] for d in cur.description]
-        rows = cur.fetchmany(MAX_ROWS + 1)
-        truncated = len(rows) > MAX_ROWS
-        rows = rows[:MAX_ROWS]
-        data = [{c: _norm(v) for c, v in zip(cols, r)} for r in rows]
-        return {
-            "columns": cols,
-            "rows": data,
-            "row_count": len(data),
-            "truncated": truncated,
-        }
+
+        if kind == "read":
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchmany(MAX_ROWS + 1)
+            truncated = len(rows) > MAX_ROWS
+            rows = rows[:MAX_ROWS]
+            data = [{c: _norm(v) for c, v in zip(cols, r)} for r in rows]
+            return {
+                "statement": "read",
+                "columns": cols,
+                "rows": data,
+                "row_count": len(data),
+                "truncated": truncated,
+            }
+
+        # write: 변경 문장은 커밋해야 반영된다
+        conn.commit()
+        affected = getattr(cur, "rowcount", -1)
+        return {"statement": "write", "affected_rows": affected}
     finally:
         conn.close()
 
