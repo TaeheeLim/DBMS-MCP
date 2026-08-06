@@ -20,6 +20,44 @@ jars/             ← JDBC 드라이버 jar 모음 (connections.json 의 jars �
 > `connections.json` 에는 IP·계정·비밀번호가 들어가므로 git 에 커밋하지 않는다(`.gitignore` 포함).
 > 형식은 아래 예시와 `connections copy.json`(플레이스홀더 템플릿) 을 참고하라.
 
+## 레지스트리 백엔드 — 파일 / PostgreSQL
+
+연결정보를 어디서 읽을지 `REGISTRY_BACKEND` 환경변수로 고른다.
+
+| 백엔드 | 값 | 저장소 | 비밀번호 |
+|--------|----|--------|----------|
+| **PostgreSQL** (기본) | `postgres` | `jdbc_group` / `jdbc_connection` 테이블 | **Fernet 암호문**으로 저장, 키는 서버 env(`REGISTRY_ENC_KEY`)에만 |
+| **파일** | `file` | `connections.json` | 평문 (파일 권한/`.gitignore` 로 보호) |
+
+두 백엔드 모두 `_resolve_profile` 이 만드는 프로파일 형태가 같아 도구 동작은 동일하다.
+`default` 개념은 없다 — 호출 시 항상 `그룹/연결` 을 지정하거나, 자연어로 지칭하면 Claude 가
+`list_connections` 로 골라 쓴다.
+
+### PostgreSQL 백엔드 설정
+
+```powershell
+# 1) 레지스트리 DB에 스키마 적용
+psql "postgresql://user:pw@HOST:5432/mcp_registry" -f schema.sql
+
+# 2) Fernet 키 생성 (출력값을 REGISTRY_ENC_KEY 로 보관)
+python migrate_json_to_pg.py --gen-key
+
+# 3) 기존 connections.json 을 PG로 적재 (비밀번호는 자동 암호화)
+$env:REGISTRY_PG_DSN  = "postgresql://user:pw@HOST:5432/mcp_registry"
+$env:REGISTRY_ENC_KEY = "<위에서 생성한 키>"
+python migrate_json_to_pg.py --dry-run    # 먼저 무엇이 들어갈지 확인
+python migrate_json_to_pg.py              # 실제 적재 (멱등, 재실행 안전)
+```
+
+관련 env: `REGISTRY_PG_DSN`(접속), `REGISTRY_ENC_KEY`(복호화 키), `REGISTRY_CACHE_TTL`(캐시 초, 기본 30).
+
+- 연결정보를 SQL 로 수정한 뒤 캐시 TTL 을 기다리지 않으려면 `refresh_connections` 도구를 호출한다.
+- MCP 서버는 `SELECT` 권한만 가진 읽기 전용 계정으로 접속하게 하면 레지스트리 변조를 막을 수 있다.
+- ⚠ `REGISTRY_ENC_KEY` 는 마이그레이션 스크립트와 MCP 서버가 **반드시 동일한 값**이어야 복호화된다. 분실 시 비밀번호를 복구할 수 없다.
+
+> jars 는 DB에 경로 문자열만 저장되고 **실제 jar 파일은 여전히 MCP 서버 호스트의 `jars/` 에 있어야** 한다.
+> 새 드라이버 jar 를 추가하면 JVM classpath 재초기화를 위해 서버 재시작이 필요하다(백엔드와 무관).
+
 ## 제공 도구
 
 | 도구 | 설명 |
@@ -28,11 +66,12 @@ jars/             ← JDBC 드라이버 jar 모음 (connections.json 의 jars �
 | `run_query(sql, connection?)` | SQL 실행 — 조회(SELECT/WITH, 행 수 제한) + 변경(INSERT/UPDATE/DELETE/MERGE, 자동 커밋) |
 | `list_tables(connection?, schema?)` | 테이블/뷰 목록 (JDBC 표준 메타데이터) |
 | `describe_table(table_name, connection?, schema?)` | 컬럼 정보 (JDBC 표준 메타데이터) |
+| `refresh_connections()` | 레지스트리 캐시 비우기 (postgres 백엔드에서 수정 즉시 반영용) |
 
-- `connection` 인자를 생략하면 `connections.json` 의 `default` 연결을 사용한다.
+- `connection` 은 `그룹/연결` 형식으로 지정한다 (예: `tibero7/lcard`). 생략 시 사용 가능한 연결 목록을 안내한다.
 - 사용자가 "개발 티베로", "운영 오라클" 같은 **자연어로 DB를 지칭**하면 Claude 는 먼저
   `list_connections` 로 각 연결의 `desc`(설명)를 보고 알맞은 `그룹/연결` 이름을 고른다.
-  그래서 connections.json 의 각 연결에 `desc` 를 적어두는 것이 중요하다.
+  그래서 각 연결에 `desc` 를 적어두는 것이 중요하다.
 
 ## 사전 준비
 

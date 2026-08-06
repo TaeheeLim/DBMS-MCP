@@ -19,7 +19,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 코드만 복사 (connections.json / jars 는 런타임에 마운트)
-COPY jdbc_mcp.py .
+#   migrate_json_to_pg.py: PG 백엔드 최초 적재/키 생성/암호화 헬퍼 (docker compose run 으로 실행)
+#   schema.sql: 참고용 (실제 적용은 psql 로 PG 서버에서)
+COPY jdbc_mcp.py migrate_json_to_pg.py schema.sql ./
 
 # HTTP 전송 기본 설정 (compose 에서 덮어쓸 수 있음)
 ENV MCP_TRANSPORT=http \

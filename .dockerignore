@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .mcp.json
 client.mcp.json
+registry.env
 test_connection.py
 README.md
 DEPLOY.md

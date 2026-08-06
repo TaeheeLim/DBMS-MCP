@@ -3,3 +3,5 @@ __pycache__/
 connections.json
 .mcp.json
 client.mcp.json
+registry.env
+docker-compose.yml
